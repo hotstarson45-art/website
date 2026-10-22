@@ -1,0 +1,77 @@
+body {
+	margin: 15px;
+}
+
+p {
+	margin: 0px;
+	padding: 0px;
+}
+
+a {
+	color: #1B1464;
+}
+
+a, a:link, a:visited, a:hover, a:active {
+	color: #1B1464;
+	text-decoration: underline;
+}
+
+.titel {
+	color: #1B1464;
+	font-size: 50px;
+	font-weight: bold;
+}
+
+#melding {
+	background-color: #ffff66;
+}
+
+.bgcolor {
+	background-color: #DDDDDD;
+}
+
+.tabel {
+	border-style: solid;
+	border-width: 3px;
+	border-color: #1B1464;
+	border-collapse: collapse;
+	text-align: left;
+}
+
+.tabel thead {
+	background-color: #1B1464;
+	color: white;
+	font-weight: bold;
+}
+
+.tabel tfoot {
+	text-align: center;
+	font-weight: bold;
+}
+
+.tabelHeader tbody td {
+	border-width: 1px;
+	border-color: #1B1464;
+	border-style: solid;
+	font-size: small;
+	white-space:nowrap;
+}
+
+.taakTooltip {
+	cursor: pointer;
+}
+
+.tags {
+	font-size: small;
+}
+
+/**
+ * styling for tip content
+ * note: canvas (the tip itself) cannot be styled here. use javascript options for that.
+ */
+.bt-content {
+  font-size: small;
+  color: #000;
+  line-height: normal;
+}
+
