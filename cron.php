@@ -1,7 +1,5 @@
 <?php
-$_SERVER['PHP_AUTH_USER'] = 'stars';
-$_SERVER['PHP_AUTH_PW'] = 'goedvoer';
-
+define('SCHOONMAAK_CRON', true);
 include("include.php");
 
 // herinnering mailtje sturen

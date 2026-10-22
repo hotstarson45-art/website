@@ -219,6 +219,8 @@ include("include.php");
 			
 			// taken opvragen en in rooster zetten
 			zetTakenInRooster(isRoosterToekomst);
+		}).fail(function(){
+			showMelding("De roosterweken konden niet worden geladen. Laad de pagina opnieuw en controleer de databaseverbinding.");
 		});
 	}
 	
@@ -260,6 +262,8 @@ include("include.php");
 				$('#'+celId).attr('alt', 'request.php?soort=taakInfo&isRoosterToekomst='+ isRoosterToekomst +'&taakId='+ taakId +'&persoonId='+ persoonId +'&weekId='+ week);
 				$('#'+celId).html('<a href="#" class="disableLink taakTooltip" alt="request.php?soort=taakInfo&isRoosterToekomst='+ isRoosterToekomst +'&taakId='+ taakId +'&persoonId='+ persoonId +'&weekId='+ week +'"'+ aStyle +'>'+ taakNaam +'</a>');
 			});
+		}).fail(function(){
+			showMelding("De taken konden niet worden geladen. Controleer de databaseverbinding en laad het rooster opnieuw.");
 		});
 	}
 	

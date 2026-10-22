@@ -1,7 +1,19 @@
 <?php
 include("include.php");
 
-$soort = $_POST['soort'];
+function normalizeFineAmount($amount) {
+	$amount = str_replace(',', '.', trim((string) $amount));
+	if (!preg_match('/^\d{1,6}(?:\.\d{1,2})?$/', $amount)) {
+		throw new InvalidArgumentException('Voer een geldig boetebedrag in, bijvoorbeeld 5,00.');
+	}
+	return number_format((float) $amount, 2, '.', '');
+}
+
+function validTaskDate($year, $month, $day) {
+	return checkdate((int) $month, (int) $day, (int) $year);
+}
+
+$soort = isset($_POST['soort']) ? $_POST['soort'] : '';
 
 if ($soort == 'persoonInfo') {
 	// persoon informatie verwerken
@@ -34,34 +46,51 @@ if ($soort == 'persoonInfo') {
 	}
 } else if ($soort == 'taakInfo') {
 	// taak informatie verwerken
-	$save = $_POST['save'];
-	$taakId = intval($_POST['taakId']);
-	$taakNaam = htmlentities($_POST['taakNaam'], ENT_QUOTES, 'UTF-8');
-	$deadline = $_POST['deadline'];
-	$deadlineDag = intval($_POST['deadlineDag']);
-	$deadlineMaand = intval($_POST['deadlineMaand']);
-	$deadlineJaar = intval($_POST['deadlineJaar']);
-	$gedaan = $_POST['gedaan'];
-	$gedaanOpDag = intval($_POST['gedaanOpDag']);
-	$gedaanOpMaand = intval($_POST['gedaanOpMaand']);
-	$gedaanOpJaar = intval($_POST['gedaanOpJaar']);
-	$boete = $_POST['boete'];
-	$boeteMeldingMail = $_POST['boeteMeldingMail'] == 'true';
-	$herinneringNaDeadlineMail = $_POST['herinneringNaDeadlineMail'] == 'true';
+	$save = isset($_POST['save']) ? $_POST['save'] : '';
+	if (in_array($save, array('gedaan', 'deadline', 'gedaanOp', 'boeteWijzigen'), true) && !$schoonmaakmeester) {
+		http_response_code(403);
+		exit('Alleen de beheerder mag taakstatus, deadlines en boetes wijzigen.');
+	}
+	$taakId = isset($_POST['taakId']) ? intval($_POST['taakId']) : 0;
+	$taakNaam = isset($_POST['taakNaam']) ? htmlentities($_POST['taakNaam'], ENT_QUOTES, 'UTF-8') : '';
+	$deadline = isset($_POST['deadline']) ? $_POST['deadline'] : '';
+	$deadlineDag = isset($_POST['deadlineDag']) ? intval($_POST['deadlineDag']) : 0;
+	$deadlineMaand = isset($_POST['deadlineMaand']) ? intval($_POST['deadlineMaand']) : 0;
+	$deadlineJaar = isset($_POST['deadlineJaar']) ? intval($_POST['deadlineJaar']) : 0;
+	$gedaan = isset($_POST['gedaan']) ? $_POST['gedaan'] : '';
+	$gedaanOpDag = isset($_POST['gedaanOpDag']) ? intval($_POST['gedaanOpDag']) : 0;
+	$gedaanOpMaand = isset($_POST['gedaanOpMaand']) ? intval($_POST['gedaanOpMaand']) : 0;
+	$gedaanOpJaar = isset($_POST['gedaanOpJaar']) ? intval($_POST['gedaanOpJaar']) : 0;
+	$boete = isset($_POST['boete']) ? $_POST['boete'] : '0,00';
+	$addTaskToCatalog = isset($_POST['addTaskToCatalog']) && $_POST['addTaskToCatalog'] === 'true';
+	$boeteMeldingMail = isset($_POST['boeteMeldingMail']) && $_POST['boeteMeldingMail'] == 'true';
+	$herinneringNaDeadlineMail = isset($_POST['herinneringNaDeadlineMail']) && $_POST['herinneringNaDeadlineMail'] == 'true';
+	if (($boeteMeldingMail || $herinneringNaDeadlineMail) && !$schoonmaakmeester) {
+		http_response_code(403);
+		exit('Alleen de beheerder mag herinneringen en boetemeldingen versturen.');
+	}
 	
 	if ($save == "taakNaam") {
+		if (!$schoonmaakmeester) {
+			http_response_code(403);
+			exit('Alleen de beheerder mag taken toewijzen.');
+		}
 		// naam taak wijzigen en evt. taak aanmaken / verwijderen
+		require_once __DIR__ . '/schedule.php';
 		if ($taakId == 0) {
 			// taak aanmaken
 			$persoonId = intval($_POST['persoonId']);
 			$weekId = $_POST['weekId'];
-			
-			$deadline = week2date($weekId);
-			
-			$query = "INSERT INTO taken SET week='". $weekId ."', taakNaam='". $taakNaam ."', persoonId='". $persoonId ."', deadline='". date("Y-m-d", $deadline) ."'";
-			$link->query($query);
-			
-			echo "Taak <i>". stripslashes($taakNaam) ."</i> aangemaakt.";
+			try {
+				saveTaskAssignment($link, $config, 0, $weekId, $persoonId, stripslashes($taakNaam), $addTaskToCatalog);
+				echo "Taak <i>". stripslashes($taakNaam) ."</i> aangemaakt.";
+			} catch (DomainException $exception) {
+				http_response_code(400);
+				echo htmlspecialchars($exception->getMessage(), ENT_QUOTES, 'UTF-8');
+			} catch (InvalidArgumentException $exception) {
+				http_response_code(400);
+				echo htmlspecialchars($exception->getMessage(), ENT_QUOTES, 'UTF-8');
+			}
 		} else if ($taakNaam == '-') {
 			// taak verwijderen
 			$query = "DELETE FROM taken WHERE taakId='". $taakId ."'";
@@ -69,40 +98,100 @@ if ($soort == 'persoonInfo') {
 			echo "Taak verwijderd.";
 		} else {
 			// taak naam aanpassen
-			$query = "UPDATE taken SET taakNaam='". $taakNaam ."' WHERE taakId='". $taakId ."'";
-			$link->query($query);
-			echo "Taak naar <i>". stripslashes($taakNaam) ."</i> aangepast.";
+			$weekId = isset($_POST['weekId']) ? $_POST['weekId'] : '';
+			$persoonId = isset($_POST['persoonId']) ? intval($_POST['persoonId']) : 0;
+			try {
+				saveTaskAssignment($link, $config, $taakId, $weekId, $persoonId, stripslashes($taakNaam), $addTaskToCatalog);
+				echo "Taak naar <i>". stripslashes($taakNaam) ."</i> aangepast.";
+			} catch (DomainException $exception) {
+				http_response_code(400);
+				echo htmlspecialchars($exception->getMessage(), ENT_QUOTES, 'UTF-8');
+			} catch (InvalidArgumentException $exception) {
+				http_response_code(400);
+				echo htmlspecialchars($exception->getMessage(), ENT_QUOTES, 'UTF-8');
+			}
+		}
+	} else if ($save == "persoon") {
+		if (!$schoonmaakmeester) {
+			http_response_code(403);
+			exit('Alleen de beheerder mag taken opnieuw toewijzen.');
+		}
+		require_once __DIR__ . '/schedule.php';
+		try {
+			moveTaskAssignment($link, $taakId, intval($_POST['persoonId']));
+			echo 'De taak is opnieuw toegewezen.';
+		} catch (DomainException $exception) {
+			http_response_code(400);
+			echo htmlspecialchars($exception->getMessage(), ENT_QUOTES, 'UTF-8');
+		} catch (InvalidArgumentException $exception) {
+			http_response_code(400);
+			echo htmlspecialchars($exception->getMessage(), ENT_QUOTES, 'UTF-8');
 		}
 	} else if ($save == "gedaan") {
-		// gedaan wijzigen
-		if (($gedaan == 'nogNiet') || ($gedaan == 'nooit')) {
-			$query = "UPDATE taken SET gedaan='". $gedaan ."', gedaanOp='0000-00-00', boete='". str_replace(",", ".", $boete) ."' WHERE taakId='". $taakId ."'";
-			$link->query($query);
-			if ($gedaan == 'nogNiet')
-				echo "Opgeslagen dat taak <i>nog niet</i> is gedaan.";
-			else
-				echo "Opgeslagen dat taak <i>nooit</i> is gedaan met <i>&euro; ". $boete ."</i> boete.";
-		} else {
-			// taak is gedaanOp
-			$query = "UPDATE taken SET gedaan='". $gedaan ."', gedaanOp='". $gedaanOpJaar ."-". $gedaanOpMaand ."-". $gedaanOpDag ."', boete='". str_replace(",", ".", $boete) ."' WHERE taakId='". $taakId ."'";
-			$link->query($query);
-			echo "Opgeslagen dat taak is gedaan op ". $gedaanOpDag ." ". $maandenTxt[$gedaanOpMaand-1] ." ". $gedaanOpJaar ." met <i>&euro; ". $boete ."</i> boete.";
+		try {
+			if (!in_array($gedaan, array('nogNiet', 'nooit', 'ja'), true)) {
+				throw new InvalidArgumentException('Kies een geldige taakstatus.');
+			}
+			$boete = normalizeFineAmount($boete);
+			if ($gedaan !== 'ja') {
+				$query = $link->prepare("UPDATE taken SET gedaan = ?, gedaanOp = '0000-00-00', boete = ? WHERE taakId = ?");
+				$query->bind_param('ssi', $gedaan, $boete, $taakId);
+				$query->execute();
+				if ($gedaan == 'nogNiet')
+					echo "Opgeslagen dat taak <i>nog niet</i> is gedaan.";
+				else
+					echo "Opgeslagen dat taak <i>nooit</i> is gedaan met <i>&euro; ". $boete ."</i> boete.";
+			} else {
+				if (!validTaskDate($gedaanOpJaar, $gedaanOpMaand, $gedaanOpDag)) {
+					throw new InvalidArgumentException('Kies een geldige datum waarop de taak is gedaan.');
+				}
+				$gedaanOp = sprintf('%04d-%02d-%02d', $gedaanOpJaar, $gedaanOpMaand, $gedaanOpDag);
+				$query = $link->prepare('UPDATE taken SET gedaan = ?, gedaanOp = ?, boete = ? WHERE taakId = ?');
+				$query->bind_param('sssi', $gedaan, $gedaanOp, $boete, $taakId);
+				$query->execute();
+				echo "Opgeslagen dat taak is gedaan op ". $gedaanOpDag ." ". $maandenTxt[$gedaanOpMaand-1] ." ". $gedaanOpJaar ." met <i>&euro; ". $boete ."</i> boete.";
+			}
+		} catch (InvalidArgumentException $exception) {
+			http_response_code(400);
+			echo htmlspecialchars($exception->getMessage(), ENT_QUOTES, 'UTF-8');
 		}
 	} else if ($save == "deadline") {
-		// deadline wijzigen
-		$query = "UPDATE taken SET deadline='". $deadlineJaar ."-". $deadlineMaand ."-". $deadlineDag ."' WHERE taakId='". $taakId ."'";
-		$link->query($query);
-		echo "Opgeslagen dat deadline van taak is ". $deadlineDag ." ". $maandenTxt[$deadlineMaand-1] ." ". $deadlineJaar .".";
+		if (validTaskDate($deadlineJaar, $deadlineMaand, $deadlineDag)) {
+			$deadline = sprintf('%04d-%02d-%02d', $deadlineJaar, $deadlineMaand, $deadlineDag);
+			$query = $link->prepare('UPDATE taken SET deadline = ? WHERE taakId = ?');
+			$query->bind_param('si', $deadline, $taakId);
+			$query->execute();
+			echo "Opgeslagen dat deadline van taak is ". $deadlineDag ." ". $maandenTxt[$deadlineMaand-1] ." ". $deadlineJaar .".";
+		} else {
+			http_response_code(400);
+			echo 'Kies een geldige deadline.';
+		}
 	} else if ($save == "gedaanOp") {
-		// gedaanOp wijzigen
-		$query = "UPDATE taken SET gedaanOp='". $gedaanOpJaar ."-". $gedaanOpMaand ."-". $gedaanOpDag ."', boete='". str_replace(",", ".", $boete) ."' WHERE taakId='". $taakId ."'";
-		$link->query($query);
-		echo "Opgeslagen dat taak is gedaan op ". $gedaanOpDag ." ". $maandenTxt[$gedaanOpMaand-1] ." ". $gedaanOpJaar ." met <i>&euro; ". $boete ."</i> boete.";
+		try {
+			if (!validTaskDate($gedaanOpJaar, $gedaanOpMaand, $gedaanOpDag)) {
+				throw new InvalidArgumentException('Kies een geldige datum waarop de taak is gedaan.');
+			}
+			$boete = normalizeFineAmount($boete);
+			$gedaanOp = sprintf('%04d-%02d-%02d', $gedaanOpJaar, $gedaanOpMaand, $gedaanOpDag);
+			$query = $link->prepare('UPDATE taken SET gedaanOp = ?, boete = ? WHERE taakId = ?');
+			$query->bind_param('ssi', $gedaanOp, $boete, $taakId);
+			$query->execute();
+			echo "Opgeslagen dat taak is gedaan op ". $gedaanOpDag ." ". $maandenTxt[$gedaanOpMaand-1] ." ". $gedaanOpJaar ." met <i>&euro; ". $boete ."</i> boete.";
+		} catch (InvalidArgumentException $exception) {
+			http_response_code(400);
+			echo htmlspecialchars($exception->getMessage(), ENT_QUOTES, 'UTF-8');
+		}
 	} else if ($save == "boeteWijzigen") {
-		// boete wijzigen
-		$query = "UPDATE taken SET boete='". str_replace(",", ".", $boete) ."' WHERE taakId='". $taakId ."'";
-		$link->query($query);
-		echo "Opgeslagen dat taak <i>&euro; ". $boete ."</i> boete heeft.";
+		try {
+			$boete = normalizeFineAmount($boete);
+			$query = $link->prepare('UPDATE taken SET boete = ? WHERE taakId = ?');
+			$query->bind_param('si', $boete, $taakId);
+			$query->execute();
+			echo "Opgeslagen dat taak <i>&euro; ". $boete ."</i> boete heeft.";
+		} catch (InvalidArgumentException $exception) {
+			http_response_code(400);
+			echo htmlspecialchars($exception->getMessage(), ENT_QUOTES, 'UTF-8');
+		}
 	} else if ($herinneringNaDeadlineMail || $boeteMeldingMail) {
 		// herinnering na deadline of boete melding mail versturen
 		$query = "SELECT t.*, p.* FROM taken AS t, personen AS p WHERE t.taakId='". $taakId ."' AND t.persoonId=p.persoonId";
@@ -174,8 +263,12 @@ if ($soort == 'persoonInfo') {
 		$mail->send($info['emailadres'], $headersMail, $bodyMail);
 	}
 } else if ($soort == 'schoonmaakmeester') {
+	if (!$schoonmaakmeester) {
+		http_response_code(403);
+		exit('Alleen de beheerder mag deze instellingen wijzigen.');
+	}
 	// schoonmaakmeester informatie verwerken
-	$save = $_POST['save'];
+	$save = isset($_POST['save']) ? $_POST['save'] : '';
 	if ($save == "taak") {
 		$taakToevoegen = addslashes(htmlentities(stripslashes($_POST['taakToevoegen']), ENT_QUOTES, 'UTF-8'));
 		$taakVerwijderen = addslashes(htmlentities(stripslashes($_POST['taakVerwijderen']), ENT_QUOTES, 'UTF-8'));
@@ -183,6 +276,29 @@ if ($soort == 'persoonInfo') {
 		$taakVeranderenNaar = addslashes(htmlentities(stripslashes($_POST['taakVeranderenNaar']), ENT_QUOTES, 'UTF-8'));
 		$taakOmdraaien1 = addslashes(htmlentities(stripslashes($_POST['taakOmdraaien1']), ENT_QUOTES, 'UTF-8'));
 		$taakOmdraaien2 = addslashes(htmlentities(stripslashes($_POST['taakOmdraaien2']), ENT_QUOTES, 'UTF-8'));
+
+		$taskToAdd = strtolower(trim(stripslashes($taakToevoegen)));
+		$taskToRemove = strtolower(trim(stripslashes($taakVerwijderen)));
+		$taskToRename = strtolower(trim(stripslashes($taakVeranderenVan)));
+		$newTaskName = strtolower(trim(stripslashes($taakVeranderenNaar)));
+		if (!empty($taakToevoegen) || !empty($taakVeranderenNaar)) {
+			$checkName = !empty($taakToevoegen) ? $taskToAdd : $newTaskName;
+			foreach ($config['taken'] as $existingTask) {
+				if (strtolower(trim($existingTask)) === $checkName
+					&& (!empty($taakToevoegen) || strtolower(trim($existingTask)) !== $taskToRename)) {
+					http_response_code(400);
+					exit('Deze taaknaam bestaat al.');
+				}
+			}
+		}
+		if (!empty($taakVerwijderen) && ($taskToRemove === 'woonkamer' || count($config['taken']) <= 1)) {
+			http_response_code(400);
+			exit('Woonkamer moet in de takenlijst blijven en de lijst mag niet leeg zijn.');
+		}
+		if (!empty($taakVeranderenVan) && $taskToRename === 'woonkamer') {
+			http_response_code(400);
+			exit('De taak woonkamer moet deze naam houden zodat de dubbele wekelijkse toewijzing blijft werken.');
+		}
 		
 		$takenTxt = "array(";
 		if (!empty($taakToevoegen)) {
@@ -250,7 +366,8 @@ if ($soort == 'persoonInfo') {
 			// eerst achter maximum kolomNr komen
 			$query = "SELECT MAX(kolomNr) FROM personen";
 			$result = $link->query($query);
-			$maxKolomNr = mysql_result($result, 0);
+			$row = mysqli_fetch_row($result);
+			$maxKolomNr = $row[0];
 			$kolomNr = $maxKolomNr + 1;
 			
 			$query = "INSERT INTO personen SET `persoonNaam`='". $persoonToevoegen ."', `kolomNr`='". $kolomNr ."', `emailadres`='". $emailadres ."'";
@@ -277,11 +394,13 @@ if ($soort == 'persoonInfo') {
 			// personen omdraaien
 			$query = "SELECT kolomNr FROM personen WHERE `persoonId`='". $personenOmdraaien1 ."'";
 			$result = $link->query($query);
-			$kolomNr1 = mysql_result($result, 0);
+			$row = mysqli_fetch_row($result);
+			$kolomNr1 = $row[0];
 			
 			$query = "SELECT kolomNr FROM personen WHERE `persoonId`='". $personenOmdraaien2 ."'";
 			$result = $link->query($query);
-			$kolomNr2 = mysql_result($result, 0);
+			$row = mysqli_fetch_row($result);
+			$kolomNr2 = $row[0];
 			
 			$query = "UPDATE personen SET `kolomNr`='". $kolomNr2 ."' WHERE `persoonId`='". $personenOmdraaien1 ."'";
 			$link->query($query);
@@ -362,19 +481,14 @@ if ($soort == 'persoonInfo') {
 		echo "De deadline voor taken is gezet op <i>". $dagenTxt[$deadlineDag-1] ."</i>.";
 	} else if ($save == "boetesVoldaanGrens") {
 		// boetesVoldaanGrens in config aanpassen
-		$week = $_POST['week'];
-		$jaar = $_POST['jaar'];
-		
 		$grens = explode("-", $config['boetesVoldaanGrens']);
-		$nieuweBoetesVoldaanGrens = $config['boetesVoldaanGrens'];
-		
-		if (!empty($week)) {
-			// week aanpassen
-			$nieuweBoetesVoldaanGrens = $grens[0] .'-'. $week;
-		} else if (!empty($jaar)) {
-			// jaar aanpassen
-			$nieuweBoetesVoldaanGrens = $jaar .'-'. $grens[1];
+		$week = isset($_POST['week']) && $_POST['week'] !== '' ? (int) $_POST['week'] : (int) $grens[1];
+		$jaar = isset($_POST['jaar']) && $_POST['jaar'] !== '' ? (int) $_POST['jaar'] : (int) $grens[0];
+		if ($week < 1 || $week > 53 || $jaar < 2000 || $jaar > 9999) {
+			http_response_code(400);
+			exit('Kies een geldige week en een geldig jaar.');
 		}
+		$nieuweBoetesVoldaanGrens = sprintf('%04d-%02d', $jaar, $week);
 		
 		$query = "UPDATE config SET `value`='". $nieuweBoetesVoldaanGrens ."' WHERE `key`='boetesVoldaanGrens'";
 		$link->query($query);
@@ -392,59 +506,66 @@ if ($soort == 'persoonInfo') {
 		
 		echo "Alle taken en boetes van voor week <i>". $weekTxt ."</i> zijn verwijderd.";
 	} else if ($save == "mail") {
-		// mail zaken wijzigen
-		$mailAfzender = $_POST['mailAfzender'];
-		$herinneringMailDag = intval($_POST['herinneringMailDag']);
-		$herinneringBeginWeekMailOnderwerp = $_POST['herinneringBeginWeekMailOnderwerp'];
-		$herinneringBeginWeekMailTxt = $_POST['herinneringBeginWeekMailTxt'];
-		$herinneringNaDeadlineMailOnderwerp = $_POST['herinneringNaDeadlineMailOnderwerp'];
-		$herinneringNaDeadlineMailTxt = $_POST['herinneringNaDeadlineMailTxt'];
-		$boeteMeldingMailOnderwerp = $_POST['boeteMeldingMailOnderwerp'];
-		$boeteMeldingMailTxt = $_POST['boeteMeldingMailTxt'];
-		
-		if (!empty($mailAfzender)) {
-			// mail afzender wijzigen
-			$query = "UPDATE config SET `value`='". $mailAfzender ."' WHERE `key`='mailAfzender'";
-			$link->query($query);
-			echo "De afzender van emails is gewijzigd.";
-		} else if (!empty($herinneringMailDag)) {
-			// herinneringMailDag wijzigen
-			$query = "UPDATE config SET `value`='". $herinneringMailDag ."' WHERE `key`='herinneringMailDag'";
-			$link->query($query);
-			echo "Herinneringen worden voortaan verstuurd op <i>". $dagenTxt[$herinneringMailDag-1] ."</i>.";
-		} else if (!empty($herinneringBeginWeekMailOnderwerp)) {
-			// herinneringBeginWeekMailOnderwerp wijzigen
-			$query = "UPDATE config SET `value`='". $herinneringBeginWeekMailOnderwerp ."' WHERE `key`='herinneringBeginWeekMailOnderwerp'";
-			$link->query($query);
-			echo "Onderwerp herinnering begin week is gewijzigd.";
-		} else if (!empty($herinneringBeginWeekMailTxt)) {
-			// herinneringBeginWeekMailTxt wijzigen
-			$query = "UPDATE config SET `value`='". $herinneringBeginWeekMailTxt ."' WHERE `key`='herinneringBeginWeekMailTxt'";
-			$link->query($query);
-			echo "Tekst herinnering begin week is gewijzigd.";
-		} else if (!empty($herinneringNaDeadlineMailOnderwerp)) {
-			// herinneringNaDeadlineMailOnderwerp wijzigen
-			$query = "UPDATE config SET `value`='". $herinneringNaDeadlineMailOnderwerp ."' WHERE `key`='herinneringNaDeadlineMailOnderwerp'";
-			$link->query($query);
-			echo "Onderwerp herinnering na deadline is gewijzigd.";
-		} else if (!empty($herinneringNaDeadlineMailTxt)) {
-			// herinneringNaDeadlineMailTxt wijzigen
-			$query = "UPDATE config SET `value`='". $herinneringNaDeadlineMailTxt ."' WHERE `key`='herinneringNaDeadlineMailTxt'";
-			$link->query($query);
-			echo "Tekst herinnering na deadline is gewijzigd.";
-		}  else if (!empty($boeteMeldingMailOnderwerp)) {
-			// boeteMeldingMailOnderwerp wijzigen
-			$query = "UPDATE config SET `value`='". $boeteMeldingMailOnderwerp ."' WHERE `key`='boeteMeldingMailOnderwerp'";
-			$link->query($query);
-			echo "Onderwerp boete melding mail is gewijzigd.";
-		} else if (!empty($boeteMeldingMailTxt)) {
-			// boeteMeldingMailTxt wijzigen
-			$query = "UPDATE config SET `value`='". $boeteMeldingMailTxt ."' WHERE `key`='boeteMeldingMailTxt'";
-			$link->query($query);
-			echo "Tekst boete melding mail is gewijzigd.";
+		$mailSettingKeys = array(
+			'mailAfzender',
+			'herinneringMailDag',
+			'herinneringBeginWeekMailOnderwerp',
+			'herinneringBeginWeekMailTxt',
+			'herinneringNaDeadlineMailOnderwerp',
+			'herinneringNaDeadlineMailTxt',
+			'boeteMeldingMailOnderwerp',
+			'boeteMeldingMailTxt'
+		);
+		$updatedKey = null;
+		foreach ($mailSettingKeys as $settingKey) {
+			if (array_key_exists($settingKey, $_POST)) {
+				$updatedKey = $settingKey;
+				break;
+			}
 		}
+		if ($updatedKey === null) {
+			http_response_code(400);
+			exit('Selecteer een e-mailinstelling om op te slaan.');
+		}
+
+		$settingValue = stripslashes((string) $_POST[$updatedKey]);
+		if ($updatedKey === 'herinneringMailDag') {
+			$dayNumber = (int) $settingValue;
+			if ($dayNumber < 1 || $dayNumber > 7) {
+				http_response_code(400);
+				exit('Kies een geldige dag voor de wekelijkse herinnering.');
+			}
+			$settingValue = (string) $dayNumber;
+		}
+
+		$query = $link->prepare('UPDATE config SET `value` = ? WHERE `key` = ?');
+		$query->bind_param('ss', $settingValue, $updatedKey);
+		$query->execute();
+		echo 'E-mailinstelling opgeslagen.';
 	} else {
 		print_r($_POST);
+	}
+} else if ($soort == 'schedule') {
+	if (!$schoonmaakmeester) {
+		http_response_code(403);
+		exit('Alleen de beheerder mag het rooster genereren.');
+	}
+	if (!isset($_POST['save']) || $_POST['save'] !== 'generate') {
+		http_response_code(400);
+		exit('Ongeldige roosteractie.');
+	}
+
+	require_once __DIR__ . '/schedule.php';
+	try {
+		$weeks = isset($_POST['weeks']) ? (int) $_POST['weeks'] : 12;
+		$inserted = generateWeeklySchedule($link, $config, $weeks);
+		echo 'Rooster bijgewerkt voor ' . $weeks . ' weken vanaf volgende week. ' . $inserted . ' taaktoewijzingen toegevoegd; bestaande toewijzingen zijn behouden.';
+	} catch (DomainException $exception) {
+		http_response_code(400);
+		echo htmlspecialchars($exception->getMessage(), ENT_QUOTES, 'UTF-8');
+	} catch (InvalidArgumentException $exception) {
+		http_response_code(400);
+		echo htmlspecialchars($exception->getMessage(), ENT_QUOTES, 'UTF-8');
 	}
 }
 ?>

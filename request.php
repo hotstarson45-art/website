@@ -104,6 +104,14 @@ if ($soort == 'persoonInfo') {
 		$tmp = mysqli_fetch_assoc($result);
 		$taakInfo['persoonNaam'] = $tmp['persoonNaam'];
 	}
+
+	$availableTasks = $config['taken'];
+	$taskOptionsResult = $link->query('SELECT DISTINCT taakNaam FROM taken ORDER BY taakNaam ASC');
+	while ($taskOption = mysqli_fetch_assoc($taskOptionsResult)) {
+		if (!in_array($taskOption['taakNaam'], $availableTasks, true)) {
+			$availableTasks[] = $taskOption['taakNaam'];
+		}
+	}
 	
 	$return .= '
 <script type="text/javascript">
@@ -115,36 +123,57 @@ function setCurrentValueNaam() {
 }
 
 function submitNaamTaak() {
+	var selectedTask = $(\'#taakNaam\').val();
+	if (selectedTask == \'__new__\') {
+		selectedTask = prompt("Voer de naam van de nieuwe taak in:");
+		if (selectedTask === null || $.trim(selectedTask) === "") {
+			$(\'#taakNaam\').val(currentValueNaam);
+			return;
+		}
+		selectedTask = $.trim(selectedTask);
+		$("<option>").val(selectedTask).text(selectedTask).appendTo("#taakNaam");
+		$(\'#taakNaam\').val(selectedTask);
+	}
+
 	if ($(\'#taakNaam\').val() == \'-\') {
 		// mogelijk verwijderen van taak
 		if (confirm("Weet je zeker dat je deze taak wilt verwijderen?")) {
 			// taak verwijderen
-			$.post(\'process.php\', {soort: \'taakInfo\', save: \'taakNaam\', taakId: \''. $taakId .'\', persoonId: \''. $persoonId .'\', weekId: \''. $weekId .'\', taakNaam: $("#taakNaam").val()},function(data){
+			$.ajax({type:\'POST\',url:\'process.php\',data:{soort:\'taakInfo\',save:\'taakNaam\',taakId:\''. $taakId .'\',persoonId:\''. $persoonId .'\',weekId:\''. $weekId .'\',taakNaam:$("#taakNaam").val()},success:function(data){
 				showMelding(data);
 				maakStatistieken();
 				$("body").click();
 				maakRoostersWeken('. $isRoosterToekomst .');
-			});
+			},error:function(xhr){
+				showMelding(xhr.responseText || \'Taak verwijderen is mislukt.\');
+				$(\'#taakNaam\').val(currentValueNaam);
+			}});
 		} else {
 			// select taakNaam weer terugzetten naar vorige waarde
 			$(\'#taakNaam\').val(currentValueNaam);
 		}
 	} else if ('; $return .= ($taakId != 0) ? 'true' : 'false'; $return .= ')  {
 		// update van taakNaam
-		$.post(\'process.php\', {soort: \'taakInfo\', save: \'taakNaam\', taakId: \''. $taakId .'\', persoonId: \''. $persoonId .'\', weekId: \''. $weekId .'\', taakNaam: $("#taakNaam").val()},function(data){
+		$.ajax({type:\'POST\',url:\'process.php\',data:{soort:\'taakInfo\',save:\'taakNaam\',taakId:\''. $taakId .'\',persoonId:\''. $persoonId .'\',weekId:\''. $weekId .'\',taakNaam:selectedTask,addTaskToCatalog:true},success:function(data){
 			showMelding(data);
 			celId = "taakcel_'. $weekId .'_'. $persoonId .'";
-			$("#"+ celId +" > a").text($("#taakNaam").val());
-		});
+			$("#"+ celId +" > a").text(selectedTask);
+		},error:function(xhr){
+			showMelding(xhr.responseText || \'Taak wijzigen is mislukt.\');
+			$(\'#taakNaam\').val(currentValueNaam);
+		}});
 		setCurrentValueNaam();
 	} else {
 		// nieuwe taak aanmaken
-		$.post(\'process.php\', {soort: \'taakInfo\', save: \'taakNaam\', taakId: \''. $taakId .'\', persoonId: \''. $persoonId .'\', weekId: \''. $weekId .'\', taakNaam: $("#taakNaam").val()},function(data){
+		$.ajax({type:\'POST\',url:\'process.php\',data:{soort:\'taakInfo\',save:\'taakNaam\',taakId:\''. $taakId .'\',persoonId:\''. $persoonId .'\',weekId:\''. $weekId .'\',taakNaam:selectedTask,addTaskToCatalog:true},success:function(data){
 			showMelding(data);
 			maakStatistieken();
 			$("body").click();
 			zetTakenInRooster('. $isRoosterToekomst .');
-		});
+		},error:function(xhr){
+			showMelding(xhr.responseText || \'Taak toewijzen is mislukt.\');
+			$(\'#taakNaam\').val(\'\');
+		}});
 		setCurrentValueNaam();
 	}
 }';
@@ -168,23 +197,8 @@ function submitWijzigGedaan(value) {
 }
 
 function updateBoete() {
-	var boete = "0,00";
-	';
-	$dagTeLaat = sqldate2phpdate($taakInfo['deadline']);
-	for ($i = 1; $i < 5; $i++) {
-		$dagTeLaat = $dagTeLaat + 24*60*60;
-		$return .= '
-	if (($("#persoonInfoForm_gedaan_ja").attr("checked")) && ($("#gedaanOpDag").val() == \''. date("j", $dagTeLaat) .'\') && ($("#gedaanOpMaand").val() == \''. date("n", $dagTeLaat) .'\') && ($("#gedaanOpJaar").val() == \''. date("Y", $dagTeLaat) .'\'))
-		boete = \''. $config['boeteTeLaat'][$i] .'\';';
-	}
-	$return .= '
-	if ($("#persoonInfoForm_gedaan_nooit").attr("checked"))
-		boete = \''. $config['boeteTeLaat'][0] .'\';
-	
-	$("#boete").val(boete);
-	
+	// Fine amounts are entered explicitly by the admin.
 	updateKleur();
-	
 	mogelijkWeergevenMail();
 }
 
@@ -234,23 +248,19 @@ $return .= '
 			Taak
 		</td>
 		<td>';
-	// mogelijkheid om taak te wijzigen niet weergeven als:
-	// Geen schoonmaakmeester EN 
-	// - Of taak is afgerond / uitgevoerd
-	// - Of taak is uit het verleden
-	if ((!$schoonmaakmeester) && (($taakInfo['gedaan'] == 'ja') || ($taakInfo['gedaan'] == 'nooit') || (intval(str_replace("-", "", $taakInfo['week'])) < intval(date("oW")))))
+	if (!$schoonmaakmeester)
 		$return .= $taakInfo['taakNaam'];
 	else {
 		$return .= '
 			<select onchange="submitNaamTaak();" id="taakNaam" onFocus="setCurrentValueNaam();" onclick="setCurrentValueNaam();">';
 		$selected = ($taakInfo['taakNaam'] == "") ? ' selected="selected"' : '';
 		$return .= '<option value="-"'. $selected .'>&nbsp;</option>';
-		foreach($config['taken'] as $taak) {
+		foreach($availableTasks as $taak) {
 			$selected = ($taak == $taakInfo['taakNaam']) ? ' selected="selected"' : '';
-			$return .= '<option value="'. $taak .'"'. $selected .'>'. $taak .'</option>';
+			$displayTask = htmlspecialchars(html_entity_decode($taak, ENT_QUOTES, 'UTF-8'), ENT_QUOTES, 'UTF-8');
+			$return .= '<option value="'. $displayTask .'"'. $selected .'>'. $displayTask .'</option>';
 		}
-		if (($taakInfo['taakNaam'] != '') && (!in_array($taakInfo['taakNaam'], $config['taken'])))
-			$return .= '<option value="'. $taakInfo['taakNaam'] .'" selected="selected">'. $taakInfo['taakNaam'] .'</option>';
+		$return .= '<option value="__new__">Nieuwe taak toevoegen...</option>';
 		$return .= '
 				</select>';
 	}
@@ -261,8 +271,22 @@ $return .= '
 		<td>
 			Door
 		</td>
-		<td>
-			'. $taakInfo['persoonNaam'] .'
+		<td>';
+	if ($schoonmaakmeester && $taakId != 0) {
+		$personenResult = $link->query('SELECT persoonId, persoonNaam FROM personen ORDER BY kolomNr ASC');
+		$return .= '<select onchange="$.ajax({type:\'POST\',url:\'process.php\',data:{soort:\'taakInfo\',save:\'persoon\',taakId:\''. $taakId .'\',persoonId:this.value},success:function(data){showMelding(data);$(\'body\').click();maakRoostersWeken('. $isRoosterToekomst .');},error:function(xhr){showMelding(xhr.responseText || \'Toewijzen is mislukt.\');}});">';
+		while ($person = mysqli_fetch_assoc($personenResult)) {
+			$return .= '<option value="'. (int) $person['persoonId'] .'"';
+			if ((int) $person['persoonId'] === (int) $taakInfo['persoonId']) {
+				$return .= ' selected="selected"';
+			}
+			$return .= '>'. htmlspecialchars(html_entity_decode($person['persoonNaam'], ENT_QUOTES, 'UTF-8'), ENT_QUOTES, 'UTF-8') .'</option>';
+		}
+		$return .= '</select>';
+	} else {
+		$return .= htmlspecialchars(html_entity_decode($taakInfo['persoonNaam'], ENT_QUOTES, 'UTF-8'), ENT_QUOTES, 'UTF-8');
+	}
+	$return .= '
 		</td>
 	</tr>
 	<tr>

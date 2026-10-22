@@ -1,32 +1,89 @@
 <?php
-//foutmeldingen zichtbaar maken
 mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
-INI_SET('display_errors', 1);
-error_reporting(E_ALL);
+ini_set('display_errors', '0');
 
-//$link = new mysqli('localhost', '##USER##', '##PASSWORD##', '##DATABASE_NAME##');
-// mysqli_select_db('deb102926_schoonmaak');
+$localConfigPath = __DIR__ . '/config.local.php';
+if (!is_file($localConfigPath)) {
+	http_response_code(500);
+	exit('Missing config.local.php. Copy config.example.php and configure the database and login details.');
+}
 
-// $mysqli = new mysqli("localhost", "my_user", "my_password", "test");
+$localConfig = require $localConfigPath;
+if (!is_array($localConfig)) {
+	http_response_code(500);
+	exit('Invalid local configuration.');
+}
+$requiredConfig = array(
+	isset($localConfig['database']['host']),
+	isset($localConfig['database']['username']),
+	isset($localConfig['database']['password']),
+	isset($localConfig['database']['name']),
+	isset($localConfig['database']['charset']),
+	isset($localConfig['users']['resident']['username']),
+	isset($localConfig['users']['resident']['password']),
+	isset($localConfig['users']['admin']['username']),
+	isset($localConfig['users']['admin']['password'])
+);
+if (in_array(false, $requiredConfig, true)) {
+	http_response_code(500);
+	exit('Invalid local configuration.');
+}
+$credentials = array(
+	$localConfig['database']['host'],
+	$localConfig['database']['username'],
+	$localConfig['database']['password'],
+	$localConfig['database']['name'],
+	$localConfig['users']['resident']['username'],
+	$localConfig['users']['resident']['password'],
+	$localConfig['users']['admin']['username'],
+	$localConfig['users']['admin']['password']
+);
+if (in_array('replace-me', $credentials, true)
+	|| $localConfig['users']['resident']['username'] === $localConfig['users']['admin']['username']
+	|| $localConfig['users']['resident']['password'] === ''
+	|| $localConfig['users']['admin']['password'] === ''
+	|| $localConfig['users']['resident']['password'] === 'set-a-long-resident-password'
+	|| $localConfig['users']['admin']['password'] === 'set-a-long-admin-password') {
+	http_response_code(500);
+	exit('Set unique resident/admin usernames and non-empty passwords in config.local.php.');
+}
 
-mysql_connect("localhost", "pn128209", "28K6mnb8");
-mysqli_select_db("pn128209_schoonmaak");
+try {
+	$link = new mysqli(
+		$localConfig['database']['host'],
+		$localConfig['database']['username'],
+		$localConfig['database']['password'],
+		$localConfig['database']['name']
+	);
+	$link->set_charset($localConfig['database']['charset']);
+} catch (mysqli_sql_exception $exception) {
+	error_log('Cleaning schedule database connection failed: ' . $exception->getMessage());
+	http_response_code(500);
+	exit('The cleaning schedule database is unavailable. Check the server error log.');
+}
 
 // inloggen
-if (!isset($_SERVER['PHP_AUTH_USER'])) {
+if (PHP_SAPI === 'cli' && defined('SCHOONMAAK_CRON')) {
+	$schoonmaakmeester = false;
+} elseif (!isset($_SERVER['PHP_AUTH_USER'])) {
 	header('WWW-Authenticate: Basic realm="Schoonmaakrooster Stars on 45"');
 	header('HTTP/1.0 401 Unauthorized');
-	echo 'Je moet ingelogd zijn om het schoonmaakrooster te kunnen zien.<br />De gebruikersnaam en wachtwoord zijn hetzelfde als eetlijst.';
+	echo 'Je moet ingelogd zijn om het schoonmaakrooster te kunnen zien.';
 	exit;
 } else {
-    if (($_SERVER['PHP_AUTH_USER'] == "stars") && ($_SERVER['PHP_AUTH_PW'] == "goedvoer")) {
-    	$schoonmaakmeester = false;
-    } else if (($_SERVER['PHP_AUTH_USER'] == "schoonmaakmeester") && ($_SERVER['PHP_AUTH_PW'] == "jopie")) {
-    	$schoonmaakmeester = true;
-    } else {
-    	header('WWW-Authenticate: Basic realm="Schoonmaakrooster Stars on 45"');
+	$authenticatedUser = $_SERVER['PHP_AUTH_USER'];
+	$authenticatedPassword = isset($_SERVER['PHP_AUTH_PW']) ? $_SERVER['PHP_AUTH_PW'] : '';
+	$residentLogin = $localConfig['users']['resident'];
+	$adminLogin = $localConfig['users']['admin'];
+
+	if ($authenticatedUser === $adminLogin['username'] && hash_equals($adminLogin['password'], $authenticatedPassword)) {
+		$schoonmaakmeester = true;
+	} elseif ($authenticatedUser === $residentLogin['username'] && hash_equals($residentLogin['password'], $authenticatedPassword)) {
+		$schoonmaakmeester = false;
+	} else {
+		header('WWW-Authenticate: Basic realm="Schoonmaakrooster Stars on 45"');
 		header('HTTP/1.0 401 Unauthorized');
-		echo 'Je moet ingelogd zijn om het schoonmaakrooster te kunnen zien.<br />De gebruikersnaam en wachtwoord zijn hetzelfde als eetlijst.';
+		echo 'Je moet ingelogd zijn om het schoonmaakrooster te kunnen zien.';
 		exit;
 	}
 	
@@ -38,13 +95,12 @@ if (!isset($_SERVER['PHP_AUTH_USER'])) {
 	}
 }
 
-// met alle inkomende get en post values addslashes() doen
-if (!get_magic_quotes_gpc()) {
-	foreach ($_POST as $key => $value) {
-		$_POST[$key] = addslashes($value);
-	}
-	foreach ($_GET as $key => $value) {
-		$_GET[$key] = addslashes($value);
+// Preserve the legacy escaped-input convention while avoiding removed PHP APIs.
+foreach (array('_POST', '_GET') as $inputName) {
+	foreach ($GLOBALS[$inputName] as $key => $value) {
+		if (is_string($value)) {
+			$GLOBALS[$inputName][$key] = addslashes($value);
+		}
 	}
 }
 
@@ -61,10 +117,11 @@ if($result->num_rows == 0) {
 $config = array();
 while ($row = mysqli_fetch_assoc($result)) {
 	if (substr($row['value'], 0, 5) == "array") {
-		// value is een array
-		eval ("\$config[\$row['key']] = ". $row['value'] .";");
-		foreach ($config[$row['key']] as $key=>$value) {
-			$config[$row['key']][$key] = $value;
+		// Legacy config arrays are stored as PHP array("value", ...) strings.
+		preg_match_all('/"(?:\\\\.|[^"\\\\])*"/s', $row['value'], $matches);
+		$config[$row['key']] = array();
+		foreach ($matches[0] as $value) {
+			$config[$row['key']][] = stripcslashes(substr($value, 1, -1));
 		}
 	} else {
 		// value is een gewone waarde
@@ -126,7 +183,6 @@ function htmlToPlainTxt($html) {
 // @private
 function _htmlToPlainTxt($html) {
 	$result = html_entity_decode($html, ENT_QUOTES, 'UTF-8');
-	$result = preg_replace("/(<\/?)(\w+)([^>]*>)/e", '', $result);
-	return $result;
+	return strip_tags($result);
 }
 ?>

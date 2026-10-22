@@ -1,7 +1,4 @@
 <?php
-$_SERVER['PHP_AUTH_USER'] = 'stars';
-$_SERVER['PHP_AUTH_PW'] = 'goedvoer';
-
 include("include.php");
 require_once 'iCalcreator-2.6/iCalcreator.class.php';
 
@@ -16,7 +13,8 @@ $persoonId = intval($_GET['persoonId']);
 $query = "SELECT persoonNaam FROM personen WHERE persoonId='". $persoonId ."'";
 $result = $link->query($query);
 if ($result->num_rows < 1) { die("Er zijn geen personen gevonden."); }
-$persoonNaam = mysql_result($result, 0);
+$persoon = mysqli_fetch_assoc($result);
+$persoonNaam = $persoon['persoonNaam'];
 
 // Verkrijg taken
 $sql = 'SELECT taakNaam, deadline FROM taken WHERE persoonId = "' . $persoonId . '" AND deadline>=\''.date("Y-m-d").'\'';
@@ -26,7 +24,7 @@ if (mysqli_num_rows($query) < 1) { die("Er zijn geen toekomstige schoonmaakdiens
 $v->setProperty( "x-wr-calname", "Stars on 45 schoonmaakrooster voor ". $persoonNaam);
 
 
-while ($data = mysql_fetch_object($query)) {
+while ($data = mysqli_fetch_object($query)) {
 	$deadline = strtotime($data->deadline);
 	
 	$vevent = new vevent();
