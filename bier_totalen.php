@@ -22,6 +22,7 @@ while ($drink = $drinksResult->fetch_assoc()) {
 }
 
 $totals = array();
+$paidTotals = array();
 $grandTotalCents = 0;
 $result = $beerLink->query(
 	'SELECT person_id, drink_id, COUNT(*) AS stripe_count, SUM(price_cents) AS total_cents
@@ -36,6 +37,19 @@ while ($row = $result->fetch_assoc()) {
 		'cents' => (int) $row['total_cents']
 	);
 	$grandTotalCents += (int) $row['total_cents'];
+}
+
+$paidResult = $beerLink->query(
+	'SELECT paid_by_person_id, SUM(total_price_cents) AS total_paid_cents
+	FROM beer_stock_batches
+	WHERE paid_by_person_id IS NOT NULL
+	GROUP BY paid_by_person_id'
+);
+$totalPaidCents = 0;
+while ($row = $paidResult->fetch_assoc()) {
+	$personId = (int) $row['paid_by_person_id'];
+	$paidTotals[$personId] = (int) $row['total_paid_cents'];
+	$totalPaidCents += (int) $row['total_paid_cents'];
 }
 
 $purchasesResult = $beerLink->query(
@@ -63,7 +77,7 @@ $flash = beerTakeFlash();
 	<header class="beer-header">
 		<div>
 			<p class="titel">Biertotalen</p>
-			<p>Bedragen zijn berekend met de prijs van de voorraadbatch op het moment van strepen.</p>
+			<p>Een betaling telt als tegoed voor de betaler; de kosten van elke streep worden daarvan afgetrokken.</p>
 		</div>
 		<nav class="beer-nav">
 			<a href="bier.php">Terug naar bierstrepen</a>
@@ -78,6 +92,7 @@ $flash = beerTakeFlash();
 
 	<div class="beer-summary-cards">
 		<div><span>Totaal ingekocht</span><strong>&euro; <?php echo beerFormatMoney($totalPurchasedCents); ?></strong></div>
+		<div><span>Toegewezen betalingen</span><strong>&euro; <?php echo beerFormatMoney($totalPaidCents); ?></strong></div>
 		<div><span>Waarde resterende voorraad</span><strong>&euro; <?php echo beerFormatMoney($remainingStockValueCents); ?></strong></div>
 		<div><span>Totaal verbruikt / verschuldigd</span><strong>&euro; <?php echo beerFormatMoney($grandTotalCents); ?></strong></div>
 	</div>
@@ -93,24 +108,30 @@ $flash = beerTakeFlash();
 					<?php foreach ($drinks as $drink): ?>
 					<th scope="col"><?php echo beerEscape($drink['drink_name']); ?><?php if (!(int) $drink['active']) echo ' (inactief)'; ?></th>
 					<?php endforeach; ?>
-					<th scope="col">Totaal</th>
+					<th scope="col">Betaald</th>
+					<th scope="col">Gedronken</th>
+					<th scope="col">Saldo</th>
 				</tr>
 			</thead>
 			<tbody>
-				<?php foreach ($people as $person): $personId = (int) $person['person_id']; $personTotal = 0; ?>
+				<?php foreach ($people as $person): $personId = (int) $person['person_id']; $personTotal = 0; $personPaid = isset($paidTotals[$personId]) ? $paidTotals[$personId] : 0; ?>
 				<tr>
 					<th scope="row"><?php echo beerEscape($person['person_name']); ?><?php if (!(int) $person['active']) echo ' (niet meer actief)'; ?></th>
 					<?php foreach ($drinks as $drink): $drinkId = (int) $drink['drink_id']; $entry = isset($totals[$personId][$drinkId]) ? $totals[$personId][$drinkId] : array('count' => 0, 'cents' => 0); $personTotal += $entry['cents']; ?>
 					<td><?php if ($entry['count'] > 0): ?><?php echo $entry['count']; ?> keer<br />&euro; <?php echo beerFormatMoney($entry['cents']); ?><?php else: ?>&mdash;<?php endif; ?></td>
 					<?php endforeach; ?>
+					<td>&euro; <?php echo beerFormatMoney($personPaid); ?></td>
 					<td class="beer-total">&euro; <?php echo beerFormatMoney($personTotal); ?></td>
+					<td class="beer-total">&euro; <?php echo beerFormatMoney($personPaid - $personTotal); ?></td>
 				</tr>
 				<?php endforeach; ?>
 			</tbody>
 			<tfoot>
 				<tr>
-					<th scope="row" colspan="<?php echo count($drinks) + 1; ?>">Totaal verschuldigd op basis van de strepen</th>
+					<th scope="row" colspan="<?php echo count($drinks) + 1; ?>">Totaal</th>
+					<td class="beer-total">&euro; <?php echo beerFormatMoney($totalPaidCents); ?></td>
 					<td class="beer-total">&euro; <?php echo beerFormatMoney($grandTotalCents); ?></td>
+					<td class="beer-total">&euro; <?php echo beerFormatMoney($totalPaidCents - $grandTotalCents); ?></td>
 				</tr>
 			</tfoot>
 		</table>

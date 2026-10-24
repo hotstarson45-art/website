@@ -22,11 +22,15 @@ CREATE TABLE beer_stock_batches (
 	quantity_total INT UNSIGNED NOT NULL,
 	quantity_remaining INT UNSIGNED NOT NULL,
 	total_price_cents INT UNSIGNED NOT NULL,
+	paid_by_person_id BIGINT UNSIGNED NULL,
 	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	PRIMARY KEY (batch_id),
 	KEY drink_stock_order (drink_id, batch_id, quantity_remaining),
+	KEY batch_paid_by (paid_by_person_id),
 	CONSTRAINT beer_batches_drink_fk FOREIGN KEY (drink_id)
-		REFERENCES beer_drinks (drink_id) ON DELETE RESTRICT ON UPDATE RESTRICT
+		REFERENCES beer_drinks (drink_id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+	CONSTRAINT beer_batches_paid_by_fk FOREIGN KEY (paid_by_person_id)
+		REFERENCES beer_people (person_id) ON DELETE SET NULL ON UPDATE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE beer_stripes (

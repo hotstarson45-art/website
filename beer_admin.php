@@ -20,9 +20,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 			}
 			$quantity = beerParseQuantity(isset($_POST['quantity']) ? $_POST['quantity'] : '');
 			$totalPriceCents = beerParseMoney(isset($_POST['total_price']) ? $_POST['total_price'] : '');
+			$payerId = beerPostId(isset($_POST['paid_by_person_id']) ? $_POST['paid_by_person_id'] : '', 'betaler');
 
 			$beerLink->begin_transaction();
 			try {
+				$payerQuery = $beerLink->prepare(
+					'SELECT person_id FROM beer_people WHERE person_id = ? AND active = 1 FOR UPDATE'
+				);
+				$payerQuery->bind_param('i', $payerId);
+				$payerQuery->execute();
+				if (!$payerQuery->get_result()->fetch_assoc()) {
+					throw new DomainException('Deze betaler staat niet meer op de actieve bewonerslijst.');
+				}
+
 				$duplicateQuery = $beerLink->prepare('SELECT drink_id FROM beer_drinks WHERE drink_name = ?');
 				$duplicateQuery->bind_param('s', $drinkName);
 				$duplicateQuery->execute();
@@ -36,10 +46,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 				$drinkId = (int) $beerLink->insert_id;
 
 				$insertBatch = $beerLink->prepare(
-					'INSERT INTO beer_stock_batches (drink_id, quantity_total, quantity_remaining, total_price_cents)
-					VALUES (?, ?, ?, ?)'
+					'INSERT INTO beer_stock_batches
+					(drink_id, quantity_total, quantity_remaining, total_price_cents, paid_by_person_id)
+					VALUES (?, ?, ?, ?, ?)'
 				);
-				$insertBatch->bind_param('iiii', $drinkId, $quantity, $quantity, $totalPriceCents);
+				$insertBatch->bind_param('iiiii', $drinkId, $quantity, $quantity, $totalPriceCents, $payerId);
 				$insertBatch->execute();
 				$beerLink->commit();
 			} catch (Throwable $error) {
@@ -51,9 +62,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 			$drinkId = beerPostId(isset($_POST['drink_id']) ? $_POST['drink_id'] : '', 'drank');
 			$quantity = beerParseQuantity(isset($_POST['quantity']) ? $_POST['quantity'] : '');
 			$totalPriceCents = beerParseMoney(isset($_POST['total_price']) ? $_POST['total_price'] : '');
+			$payerId = beerPostId(isset($_POST['paid_by_person_id']) ? $_POST['paid_by_person_id'] : '', 'betaler');
 
 			$beerLink->begin_transaction();
 			try {
+				$payerQuery = $beerLink->prepare(
+					'SELECT person_id FROM beer_people WHERE person_id = ? AND active = 1 FOR UPDATE'
+				);
+				$payerQuery->bind_param('i', $payerId);
+				$payerQuery->execute();
+				if (!$payerQuery->get_result()->fetch_assoc()) {
+					throw new DomainException('Deze betaler staat niet meer op de actieve bewonerslijst.');
+				}
+
 				$drinkQuery = $beerLink->prepare(
 					'SELECT drink_name FROM beer_drinks WHERE drink_id = ? AND active = 1 FOR UPDATE'
 				);
@@ -65,10 +86,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 				}
 
 				$insertBatch = $beerLink->prepare(
-					'INSERT INTO beer_stock_batches (drink_id, quantity_total, quantity_remaining, total_price_cents)
-					VALUES (?, ?, ?, ?)'
+					'INSERT INTO beer_stock_batches
+					(drink_id, quantity_total, quantity_remaining, total_price_cents, paid_by_person_id)
+					VALUES (?, ?, ?, ?, ?)'
 				);
-				$insertBatch->bind_param('iiii', $drinkId, $quantity, $quantity, $totalPriceCents);
+				$insertBatch->bind_param('iiiii', $drinkId, $quantity, $quantity, $totalPriceCents, $payerId);
 				$insertBatch->execute();
 				$beerLink->commit();
 			} catch (Throwable $error) {
@@ -104,6 +126,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 		beerSetFlash($exception->getMessage(), true);
 	}
 	beerRedirect('beer_admin.php');
+}
+
+$peopleResult = $beerLink->query(
+	'SELECT person_id, person_name FROM beer_people WHERE active = 1 ORDER BY sort_order ASC, person_id ASC'
+);
+$people = array();
+while ($person = $peopleResult->fetch_assoc()) {
+	$people[] = $person;
 }
 
 $drinksResult = $beerLink->query(
@@ -167,6 +197,13 @@ $flash = beerTakeFlash();
 				<input id="new-drink-quantity" name="quantity" type="number" min="1" max="999999" required />
 				<label for="new-drink-price">Totale prijs van de batch (EUR)</label>
 				<input id="new-drink-price" name="total_price" type="text" inputmode="decimal" placeholder="24,95" pattern="[0-9]+([,.][0-9]{1,2})?" required />
+				<label for="new-drink-payer">Betaald door</label>
+				<select id="new-drink-payer" name="paid_by_person_id" required>
+					<option value="">Selecteer betaler</option>
+					<?php foreach ($people as $person): ?>
+					<option value="<?php echo (int) $person['person_id']; ?>"><?php echo beerEscape($person['person_name']); ?></option>
+					<?php endforeach; ?>
+				</select>
 				<button type="submit">Drank en voorraad toevoegen</button>
 			</form>
 			<p class="admin-help">Er wordt geen statiegeld bijgehouden. Een batch mag ook EUR 0,00 kosten.</p>
@@ -191,6 +228,13 @@ $flash = beerTakeFlash();
 				<input id="restock-quantity" name="quantity" type="number" min="1" max="999999" required />
 				<label for="restock-price">Totale prijs van de batch (EUR)</label>
 				<input id="restock-price" name="total_price" type="text" inputmode="decimal" placeholder="24,95" pattern="[0-9]+([,.][0-9]{1,2})?" required />
+				<label for="restock-payer">Betaald door</label>
+				<select id="restock-payer" name="paid_by_person_id" required>
+					<option value="">Selecteer betaler</option>
+					<?php foreach ($people as $person): ?>
+					<option value="<?php echo (int) $person['person_id']; ?>"><?php echo beerEscape($person['person_name']); ?></option>
+					<?php endforeach; ?>
+				</select>
 				<button type="submit">Voorraad aanvullen</button>
 			</form>
 			<?php endif; ?>

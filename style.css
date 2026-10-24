@@ -286,6 +286,16 @@ a, a:link, a:visited, a:hover, a:active {
 	cursor: not-allowed;
 }
 
+.beer-unstripe-button {
+	margin-top: 4px;
+	padding: 4px 8px;
+	border: 1px solid #9b2525;
+	border-radius: 4px;
+	background: #fff;
+	color: #9b2525;
+	cursor: pointer;
+}
+
 .beer-count {
 	display: block;
 	margin-bottom: 4px;

@@ -10,72 +10,112 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 	try {
 		$personId = beerPostId(isset($_POST['person_id']) ? $_POST['person_id'] : '', 'persoon');
 		$drinkId = beerPostId(isset($_POST['drink_id']) ? $_POST['drink_id'] : '', 'drank');
+		$action = isset($_POST['action']) && is_string($_POST['action']) ? $_POST['action'] : '';
 
 		$beerLink->begin_transaction();
 		try {
-			$drinkQuery = $beerLink->prepare(
-				'SELECT drink_name, active FROM beer_drinks WHERE drink_id = ? FOR UPDATE'
-			);
+			$drinkQuery = $beerLink->prepare('SELECT drink_name, active FROM beer_drinks WHERE drink_id = ? FOR UPDATE');
 			$drinkQuery->bind_param('i', $drinkId);
 			$drinkQuery->execute();
 			$drink = $drinkQuery->get_result()->fetch_assoc();
-			if (!$drink || !(int) $drink['active']) {
-				throw new DomainException('Deze drankoptie is niet beschikbaar.');
+			if (!$drink) {
+				throw new DomainException('Deze drankoptie bestaat niet meer.');
 			}
 
-			$personQuery = $beerLink->prepare(
-				'SELECT person_name FROM beer_people WHERE person_id = ? AND active = 1 FOR UPDATE'
-			);
-			$personQuery->bind_param('i', $personId);
-			$personQuery->execute();
-			$person = $personQuery->get_result()->fetch_assoc();
-			if (!$person) {
-				throw new DomainException('Deze persoon staat niet meer op de actieve bewonerslijst.');
+			if ($action === 'unstripe') {
+				$stripeQuery = $beerLink->prepare(
+					'SELECT stripe_id, batch_id
+					FROM beer_stripes
+					WHERE person_id = ? AND drink_id = ?
+					ORDER BY stripe_id DESC
+					LIMIT 1
+					FOR UPDATE'
+				);
+				$stripeQuery->bind_param('ii', $personId, $drinkId);
+				$stripeQuery->execute();
+				$stripe = $stripeQuery->get_result()->fetch_assoc();
+				if (!$stripe) {
+					throw new DomainException('Er is geen streep om terug te draaien.');
+				}
+
+				$stripeId = (int) $stripe['stripe_id'];
+				$batchId = (int) $stripe['batch_id'];
+				$batchQuery = $beerLink->prepare(
+					'SELECT quantity_total, quantity_remaining FROM beer_stock_batches WHERE batch_id = ? FOR UPDATE'
+				);
+				$batchQuery->bind_param('i', $batchId);
+				$batchQuery->execute();
+				$batch = $batchQuery->get_result()->fetch_assoc();
+				if (!$batch || (int) $batch['quantity_remaining'] >= (int) $batch['quantity_total']) {
+					throw new DomainException('De voorraad kan niet veilig worden hersteld.');
+				}
+
+				$updateBatch = $beerLink->prepare(
+					'UPDATE beer_stock_batches SET quantity_remaining = quantity_remaining + 1 WHERE batch_id = ?'
+				);
+				$updateBatch->bind_param('i', $batchId);
+				$updateBatch->execute();
+
+				$deleteStripe = $beerLink->prepare('DELETE FROM beer_stripes WHERE stripe_id = ?');
+				$deleteStripe->bind_param('i', $stripeId);
+				$deleteStripe->execute();
+				$successMessage = 'De laatste streep voor ' . $drink['drink_name'] . ' is teruggedraaid en de voorraad is hersteld.';
+			} elseif ($action === 'stripe') {
+				if (!(int) $drink['active']) {
+					throw new DomainException('Deze drankoptie is niet beschikbaar.');
+				}
+
+				$personQuery = $beerLink->prepare(
+					'SELECT person_name FROM beer_people WHERE person_id = ? AND active = 1 FOR UPDATE'
+				);
+				$personQuery->bind_param('i', $personId);
+				$personQuery->execute();
+				$person = $personQuery->get_result()->fetch_assoc();
+				if (!$person) {
+					throw new DomainException('Deze persoon staat niet meer op de actieve bewonerslijst.');
+				}
+
+				$batchQuery = $beerLink->prepare(
+					'SELECT batch_id, quantity_total, quantity_remaining, total_price_cents
+					FROM beer_stock_batches
+					WHERE drink_id = ? AND quantity_remaining > 0
+					ORDER BY batch_id ASC
+					LIMIT 1
+					FOR UPDATE'
+				);
+				$batchQuery->bind_param('i', $drinkId);
+				$batchQuery->execute();
+				$batch = $batchQuery->get_result()->fetch_assoc();
+				if (!$batch) {
+					throw new DomainException('Deze drank is op. Voeg eerst voorraad toe via Bierbeheer.');
+				}
+
+				$priceCents = beerBatchUnitPrice($batch);
+				$batchId = (int) $batch['batch_id'];
+				$updateBatch = $beerLink->prepare(
+					'UPDATE beer_stock_batches SET quantity_remaining = quantity_remaining - 1 WHERE batch_id = ?'
+				);
+				$updateBatch->bind_param('i', $batchId);
+				$updateBatch->execute();
+
+				$insertStripe = $beerLink->prepare(
+					'INSERT INTO beer_stripes (person_id, drink_id, batch_id, price_cents)
+					VALUES (?, ?, ?, ?)'
+				);
+				$insertStripe->bind_param('iiii', $personId, $drinkId, $batchId, $priceCents);
+				$insertStripe->execute();
+				$successMessage = 'Een ' . $drink['drink_name'] . ' voor ' . $person['person_name']
+					. ' geregistreerd voor EUR ' . number_format($priceCents / 100, 2, ',', '.') . '.';
+			} else {
+				throw new InvalidArgumentException('Ongeldige streepactie.');
 			}
-
-			$batchQuery = $beerLink->prepare(
-				'SELECT batch_id, quantity_total, quantity_remaining, total_price_cents
-				FROM beer_stock_batches
-				WHERE drink_id = ? AND quantity_remaining > 0
-				ORDER BY batch_id ASC
-				LIMIT 1
-				FOR UPDATE'
-			);
-			$batchQuery->bind_param('i', $drinkId);
-			$batchQuery->execute();
-			$batch = $batchQuery->get_result()->fetch_assoc();
-			if (!$batch) {
-				throw new DomainException('Deze drank is op. Voeg eerst voorraad toe via Bierbeheer.');
-			}
-
-			$quantityRemaining = (int) $batch['quantity_remaining'];
-			$priceCents = beerBatchUnitPrice($batch);
-			$newQuantity = $quantityRemaining - 1;
-			$batchId = (int) $batch['batch_id'];
-
-			$updateBatch = $beerLink->prepare(
-				'UPDATE beer_stock_batches SET quantity_remaining = ? WHERE batch_id = ?'
-			);
-			$updateBatch->bind_param('ii', $newQuantity, $batchId);
-			$updateBatch->execute();
-
-			$insertStripe = $beerLink->prepare(
-				'INSERT INTO beer_stripes (person_id, drink_id, batch_id, price_cents)
-				VALUES (?, ?, ?, ?)'
-			);
-			$insertStripe->bind_param('iiii', $personId, $drinkId, $batchId, $priceCents);
-			$insertStripe->execute();
 			$beerLink->commit();
 		} catch (Throwable $error) {
 			$beerLink->rollback();
 			throw $error;
 		}
 
-		beerSetFlash(
-			'Een ' . $drink['drink_name'] . ' voor ' . $person['person_name']
-			. ' geregistreerd voor EUR ' . number_format($priceCents / 100, 2, ',', '.') . '.',
-			false
-		);
+		beerSetFlash($successMessage, false);
 	} catch (InvalidArgumentException $exception) {
 		beerSetFlash($exception->getMessage(), true);
 	} catch (DomainException $exception) {
@@ -120,6 +160,7 @@ while ($batch = $batchResult->fetch_assoc()) {
 }
 
 $counts = array();
+$latestStripeIds = array();
 $countResult = $beerLink->query(
 	'SELECT person_id, drink_id, COUNT(*) AS stripe_count
 	FROM beer_stripes
@@ -127,6 +168,14 @@ $countResult = $beerLink->query(
 );
 while ($row = $countResult->fetch_assoc()) {
 	$counts[(int) $row['person_id']][(int) $row['drink_id']] = (int) $row['stripe_count'];
+}
+$latestStripeResult = $beerLink->query(
+	'SELECT person_id, drink_id, MAX(stripe_id) AS stripe_id
+	FROM beer_stripes
+	GROUP BY person_id, drink_id'
+);
+while ($row = $latestStripeResult->fetch_assoc()) {
+	$latestStripeIds[(int) $row['person_id']][(int) $row['drink_id']] = (int) $row['stripe_id'];
 }
 $flash = beerTakeFlash();
 ?>
@@ -142,7 +191,7 @@ $flash = beerTakeFlash();
 	<header class="beer-header">
 		<div>
 			<p class="titel">Bierstrepen</p>
-			<p>Druk op de knop in de juiste rij en kolom om een drankje te registreren.</p>
+			<p>Gebruik + Streep om een drankje te registreren en − Streep om de laatste streep terug te draaien.</p>
 		</div>
 		<nav class="beer-nav">
 			<a href="bier_totalen.php">Totalen</a>
@@ -183,10 +232,20 @@ $flash = beerTakeFlash();
 						<span class="beer-count"><?php echo $count; ?> keer</span>
 						<form class="beer-stripe-form" method="post" action="bier.php" onsubmit="this.querySelector('button').disabled = true;">
 							<input type="hidden" name="csrf_token" value="<?php echo beerEscape(beerCsrfToken()); ?>" />
+							<input type="hidden" name="action" value="stripe" />
 							<input type="hidden" name="person_id" value="<?php echo $personId; ?>" />
 							<input type="hidden" name="drink_id" value="<?php echo $drinkId; ?>" />
 							<button class="beer-stripe-button" type="submit" aria-label="Streep <?php echo beerEscape($drink['drink_name']); ?> voor <?php echo beerEscape($person['person_name']); ?>"<?php if ($stock < 1) echo ' disabled="disabled"'; ?>>+ Streep</button>
 						</form>
+						<?php if (isset($latestStripeIds[$personId][$drinkId])): ?>
+						<form class="beer-stripe-form" method="post" action="bier.php" onsubmit="return confirm('De laatste streep voor deze persoon terugdraaien?');">
+							<input type="hidden" name="csrf_token" value="<?php echo beerEscape(beerCsrfToken()); ?>" />
+							<input type="hidden" name="action" value="unstripe" />
+							<input type="hidden" name="person_id" value="<?php echo $personId; ?>" />
+							<input type="hidden" name="drink_id" value="<?php echo $drinkId; ?>" />
+							<button class="beer-unstripe-button" type="submit" aria-label="Draai de laatste streep voor <?php echo beerEscape($drink['drink_name']); ?> van <?php echo beerEscape($person['person_name']); ?> terug">− Streep</button>
+						</form>
+						<?php endif; ?>
 					</td>
 					<?php endforeach; ?>
 				</tr>
