@@ -328,6 +328,7 @@ include("include.php");
 			<p class="titel">Schoonmaakrooster Stars on 45</p>
 		</td>
 		<td align="right">
+			<a href="bier.php">Bierstrepen</a> &nbsp; | &nbsp;
 			<a href="schoonmaakmeester.php">Schoonmaakmeester</a>
 		</td>
 	</tr>

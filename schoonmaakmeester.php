@@ -167,6 +167,7 @@ $paidWeek = isset($paidThrough[1]) ? (int) $paidThrough[1] : 1;
 			<p class="titel">Schoonmaakrooster</p>
 			<p>Beheer</p>
 		</div>
+		<a href="beer_admin.php">Bierbeheer</a> &nbsp; | &nbsp;
 		<a href="./">Terug naar het rooster</a>
 	</header>
 
